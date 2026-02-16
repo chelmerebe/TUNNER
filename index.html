@@ -3,86 +3,103 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>טיונר מקצועי</title>
+    <title>מזמזם לסינתיסייזר - הקלטה חכמה</title>
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
             text-align: center; 
-            margin-top: 10vh; 
-            background-color: #2c3e50; 
-            color: #ecf0f1;
+            margin-top: 5vh; 
+            background-color: #1a1a2e; 
+            color: #e94560;
         }
+        h1 { color: #4ecca3; text-shadow: 1px 1px 2px #0f3460; margin-bottom: 5px; }
+        p.subtitle { color: #bdc3c7; margin-top: 0; margin-bottom: 30px;}
         #note { 
-            font-size: 140px; 
+            font-size: 80px; 
             font-weight: bold; 
             color: #f1c40f; 
-            margin: 10px 0; 
-            min-height: 160px;
+            margin: 20px 0; 
+            min-height: 100px;
         }
-        #frequency { 
-            font-size: 32px; 
-            font-weight: bold;
-            color: #bdc3c7; 
-            margin-bottom: 10px;
+        .controls {
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #16213e;
+            border-radius: 10px;
+            display: inline-block;
+            max-width: 90%;
         }
-        #cents {
-            font-size: 24px;
-            font-weight: bold;
-            transition: color 0.2s;
-        }
-        button { 
-            font-size: 20px; 
-            padding: 15px 30px; 
+        select, button { 
+            font-size: 18px; 
+            padding: 12px 24px; 
+            margin: 10px;
             cursor: pointer; 
-            background-color: #e74c3c; 
-            color: white; 
-            border: none; 
-            border-radius: 8px; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border-radius: 8px;
+            border: none;
+            transition: all 0.2s;
         }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        #recordBtn { background-color: #e74c3c; color: white; font-weight: bold; }
+        #recordBtn.recording { background-color: #c0392b; animation: pulse 1s infinite; }
+        #playBtn { background-color: #2ecc71; color: white; font-weight: bold; display: none; }
+        
+        select { background-color: #0f3460; color: white; }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        #status { font-size: 20px; color: #ecf0f1; margin-top: 10px; min-height: 30px;}
     </style>
 </head>
 <body>
 
-    <h1>טיונר מדויק לכלים</h1>
-    <button id="startButton">התחל טיונר</button>
+    <h1>טייפ זיופים חכם</h1>
+    <p class="subtitle">זמזם מנגינה, והמחשב ינגן אותה בחזרה בצורה מושלמת</p>
+    
+    <div class="controls">
+        <label for="waveform">בחר כלי נגינה לפלייבק:</label><br>
+        <select id="waveform">
+            <option value="sine">סינוס טהור (חליל/משרוקית)</option>
+            <option value="square">מרובע (קלרינט / רטרו)</option>
+            <option value="sawtooth">שן מסור (כינור / חצוצרה)</option>
+            <option value="triangle">משולש (פעמון רך)</option>
+        </select>
+        <br>
+        <button id="recordBtn">🔴 התחל להקליט זמזום</button>
+        <button id="playBtn">▶️ נגן את המנגינה המתוקנת</button>
+    </div>
+
     <div id="note">-</div>
-    <div id="frequency">0.00 Hz</div>
-    <div id="cents">ממתין לצליל...</div>
+    <div id="status">מוכן להקלטה...</div>
 
     <script>
         let audioContext;
         let analyser;
         let microphone;
+        let oscillator;
+        let gainNode;
+        
+        // הזיכרון שלנו: מערך שישמור את התדר בכל רגע נתון
+        let memoryFrames = []; 
+        let recordingInterval;
+        let playbackInterval;
+
         const noteStrings = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        const recordBtn = document.getElementById('recordBtn');
+        const playBtn = document.getElementById('playBtn');
+        const statusEl = document.getElementById('status');
+        const noteEl = document.getElementById('note');
 
-        document.getElementById('startButton').addEventListener('click', async () => {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
-            }
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                microphone = audioContext.createMediaStreamSource(stream);
-                analyser = audioContext.createAnalyser();
-                analyser.fftSize = 4096; // הוגדל לדיוק גבוה יותר
-                microphone.connect(analyser);
-                
-                document.getElementById('startButton').style.display = 'none';
-                detectPitch();
-            } catch (err) {
-                alert('יש לאשר גישה למיקרופון בדפדפן.');
-            }
-        });
-
+        // פונקציית הזיהוי המתמטית
         function autoCorrelate(buf, sampleRate) {
             let SIZE = buf.length;
             let rms = 0;
             for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
             rms = Math.sqrt(rms / SIZE);
-            if (rms < 0.01) return -1; // שקט
+            if (rms < 0.02) return -1;
 
             let r1 = 0, r2 = SIZE - 1, thres = 0.2;
             for (let i = 0; i < SIZE / 2; i++) if (Math.abs(buf[i]) < thres) { r1 = i; break; }
@@ -98,52 +115,117 @@
 
             let d = 0; while (c[d] > c[d + 1]) d++;
             let maxval = -1, maxpos = -1;
-            for (let i = d; i < SIZE; i++) {
-                if (c[i] > maxval) {
-                    maxval = c[i];
-                    maxpos = i;
-                }
-            }
+            for (let i = d; i < SIZE; i++) if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
             let T0 = maxpos;
             return sampleRate / T0;
         }
 
-        function detectPitch() {
-            let buffer = new Float32Array(analyser.fftSize);
-            analyser.getFloatTimeDomainData(buffer);
-            let pitch = autoCorrelate(buffer, audioContext.sampleRate);
-
-            if (pitch !== -1) {
-                // מציאת התו הקרוב ביותר
-                let noteFloat = 12 * (Math.log(pitch / 440) / Math.log(2));
-                let note = Math.round(noteFloat) + 69;
-                
-                // חישוב התדר המדויק של אותו תו
-                let targetPitch = 440 * Math.pow(2, (note - 69) / 12);
-                
-                // חישוב הסטייה בסנטים
-                let cents = Math.round(1200 * Math.log2(pitch / targetPitch));
-
-                // עדכון המסך
-                document.getElementById('note').innerText = noteStrings[note % 12];
-                document.getElementById('frequency').innerText = pitch.toFixed(2) + " Hz";
-
-                let centsEl = document.getElementById('cents');
-                
-                if (Math.abs(cents) <= 3) {
-                    centsEl.innerText = "מכוון! (" + cents + " סנט)";
-                    centsEl.style.color = "#2ecc71"; // ירוק
-                } else if (cents > 3) {
-                    centsEl.innerText = "גבוה מדי (" + cents + "+ סנט)";
-                    centsEl.style.color = "#e74c3c"; // אדום
-                } else {
-                    centsEl.innerText = "נמוך מדי (" + cents + " סנט)";
-                    centsEl.style.color = "#3498db"; // כחול
-                }
+        // --- שלב 1: הקלטה לזיכרון ---
+        recordBtn.addEventListener('click', async () => {
+            if (recordBtn.classList.contains('recording')) {
+                // עצירת הקלטה
+                clearInterval(recordingInterval);
+                recordBtn.classList.remove('recording');
+                recordBtn.innerText = "🔴 הקלט שוב";
+                playBtn.style.display = 'inline-block';
+                statusEl.innerText = "ההקלטה נשמרה בזיכרון!";
+                noteEl.innerText = "-";
+                return;
             }
 
-            requestAnimationFrame(detectPitch);
-        }
+            // התחלת הקלטה
+            if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioContext.state === 'suspended') await audioContext.resume();
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                microphone = audioContext.createMediaStreamSource(stream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                microphone.connect(analyser);
+
+                memoryFrames = []; // איפוס הזיכרון
+                recordBtn.classList.add('recording');
+                recordBtn.innerText = "⏹️ סיים הקלטה";
+                playBtn.style.display = 'none';
+                statusEl.innerText = "מקליט... זמזם עכשיו!";
+
+                // כל 50 אלפיות השנייה, אנחנו בודקים את התדר ושומרים בזיכרון
+                recordingInterval = setInterval(() => {
+                    let buffer = new Float32Array(analyser.fftSize);
+                    analyser.getFloatTimeDomainData(buffer);
+                    let pitch = autoCorrelate(buffer, audioContext.sampleRate);
+
+                    if (pitch !== -1 && pitch > 50 && pitch < 2000) {
+                        // מתקן את הזיוף ושומר תדר מושלם
+                        let noteNum = Math.round(12 * (Math.log(pitch / 440) / Math.log(2))) + 69;
+                        let perfectPitch = 440 * Math.pow(2, (noteNum - 69) / 12);
+                        memoryFrames.push(perfectPitch);
+                        noteEl.innerText = noteStrings[noteNum % 12];
+                    } else {
+                        // שקט (אין זמזום ברור)
+                        memoryFrames.push(0); 
+                        noteEl.innerText = "-";
+                    }
+                }, 50);
+
+            } catch (err) {
+                alert('יש לאשר גישה למיקרופון כדי להקליט.');
+            }
+        });
+
+        // --- שלב 2: ניגון מהזיכרון ---
+        playBtn.addEventListener('click', () => {
+            if (memoryFrames.length === 0) return;
+
+            recordBtn.disabled = true;
+            playBtn.disabled = true;
+            statusEl.innerText = "מנגן את המנגינה המתוקנת...";
+
+            // הדלקת הסינתיסייזר
+            oscillator = audioContext.createOscillator();
+            gainNode = audioContext.createGain();
+            oscillator.type = document.getElementById('waveform').value;
+            
+            gainNode.gain.value = 0; // מתחיל שקט
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.start();
+
+            let currentFrame = 0;
+
+            // קורא מהזיכרון באותו קצב שבו הקלטנו (כל 50 אלפיות השנייה)
+            playbackInterval = setInterval(() => {
+                if (currentFrame >= memoryFrames.length) {
+                    // סיום הניגון
+                    clearInterval(playbackInterval);
+                    gainNode.gain.setTargetAtTime(0, audioContext.currentTime, 0.05);
+                    setTimeout(() => oscillator.stop(), 100);
+                    
+                    recordBtn.disabled = false;
+                    playBtn.disabled = false;
+                    statusEl.innerText = "סיימנו לנגן. אפשר להקליט שוב או לנגן שוב.";
+                    noteEl.innerText = "-";
+                    return;
+                }
+
+                let freq = memoryFrames[currentFrame];
+                if (freq > 0) {
+                    oscillator.frequency.setValueAtTime(freq, audioContext.currentTime);
+                    gainNode.gain.setTargetAtTime(0.5, audioContext.currentTime, 0.02); // ווליום
+                    
+                    // תצוגה
+                    let noteNum = Math.round(12 * (Math.log(freq / 440) / Math.log(2))) + 69;
+                    noteEl.innerText = noteStrings[noteNum % 12];
+                } else {
+                    gainNode.gain.setTargetAtTime(0, audioContext.currentTime, 0.02); // השתקה
+                    noteEl.innerText = "-";
+                }
+
+                currentFrame++;
+            }, 50);
+        });
+
     </script>
 </body>
 </html>
