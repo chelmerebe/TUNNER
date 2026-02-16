@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מזהה תווים</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            text-align: center; 
+            margin-top: 10vh; 
+            background-color: #2c3e50; 
+            color: #ecf0f1;
+        }
+        #note { 
+            font-size: 120px; 
+            font-weight: bold; 
+            color: #f1c40f; 
+            margin: 20px 0; 
+            min-height: 150px;
+        }
+        #frequency { 
+            font-size: 24px; 
+            color: #bdc3c7; 
+        }
+        button { 
+            font-size: 20px; 
+            padding: 15px 30px; 
+            cursor: pointer; 
+            background-color: #e74c3c; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: background-color 0.3s;
+        }
+        button:hover { background-color: #c0392b; }
+        button:active { transform: translateY(2px); }
+    </style>
+</head>
+<body>
+
+    <h1>מזהה תווים בזמן אמת</h1>
+    <button id="startButton">התחל האזנה למיקרופון</button>
+    <div id="note">-</div>
+    <div id="frequency">0 Hz</div>
+
+    <script>
+        let audioContext;
+        let analyser;
+        let microphone;
+        // מערך התווים המוזיקליים
+        const noteStrings = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+        document.getElementById('startButton').addEventListener('click', async () => {
+            // יצירת קונטקסט האודיו בלחיצה כדי לעקוף חסימות דפדפן
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            try {
+                // בקשת גישה למיקרופון
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                microphone = audioContext.createMediaStreamSource(stream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                microphone.connect(analyser);
+                
+                // העלמת הכפתור והתחלת הזיהוי
+                document.getElementById('startButton').style.display = 'none';
+                detectPitch();
+            } catch (err) {
+                alert('יש לאשר גישה למיקרופון בדפדפן כדי שהזיהוי יעבוד.');
+            }
+        });
+
+        // אלגוריתם מתמטי למציאת התדר המדויק מתוך גל הקול (Auto-correlation)
+        function autoCorrelate(buf, sampleRate) {
+            let SIZE = buf.length;
+            let rms = 0;
+            
+            // בדיקת עוצמת שמע (שקט לא יזוהה)
+            for (let i = 0; i < SIZE; i++) {
+                let val = buf[i];
+                rms += val * val;
+            }
+            rms = Math.sqrt(rms / SIZE);
+            if (rms < 0.01) return -1;
+
+            let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+            for (let i = 0; i < SIZE / 2; i++)
+                if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+            for (let i = 1; i < SIZE / 2; i++)
+                if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+
+            buf = buf.slice(r1, r2);
+            SIZE = buf.length;
+
+            let c = new Array(SIZE).fill(0);
+            for (let i = 0; i < SIZE; i++)
+                for (let j = 0; j < SIZE - i; j++)
+                    c[i] = c[i] + buf[j] * buf[j + i];
+
+            let d = 0; while (c[d] > c[d + 1]) d++;
+            let maxval = -1, maxpos = -1;
+            for (let i = d; i < SIZE; i++) {
+                if (c[i] > maxval) {
+                    maxval = c[i];
+                    maxpos = i;
+                }
+            }
+            let T0 = maxpos;
+            return sampleRate / T0;
+        }
+
+        // המרת התדר לתו מוזיקלי
+        function noteFromPitch(frequency) {
+            let noteNum = 12 * (Math.log(frequency / 440) / Math.log(2));
+            return Math.round(noteNum) + 69;
+        }
+
+        // הפונקציה שרצה בלופ ומעדכנת את המסך
+        function detectPitch() {
+            let buffer = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(buffer);
+            let pitch = autoCorrelate(buffer, audioContext.sampleRate);
+
+            if (pitch !== -1) {
+                let note = noteFromPitch(pitch);
+                document.getElementById('note').innerText = noteStrings[note % 12];
+                document.getElementById('frequency').innerText = Math.round(pitch) + " Hz";
+            }
+
+            // קריאה חוזרת לפונקציה כדי להמשיך לזהות
+            requestAnimationFrame(detectPitch);
+        }
+    </script>
+</body>
+</html>
